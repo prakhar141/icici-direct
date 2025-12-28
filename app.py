@@ -4,80 +4,48 @@ import json
 from datetime import datetime
 from breeze_connect import BreezeConnect
 
-# -------------------------------
+# --------------------------------
 # CONFIG
-# -------------------------------
+# --------------------------------
 OPENROUTER_MODEL = "moonshotai/kimi-k2:free"
 
 st.set_page_config(page_title="AI Trading Assistant", layout="wide")
-st.title("📈 AI Trading Assistant (Breeze + LLM)")
+st.title("📈 AI Trading Assistant")
 
-# -------------------------------
-# CREDENTIAL INPUT
-# -------------------------------
-with st.sidebar:
-    st.header("🔐 Breeze Login")
-
-    breeze_api_key = st.text_input(
-        "Breeze API Key",
-        value=st.secrets.get("BREEZE_API_KEY", ""),
-        type="password"
+# --------------------------------
+# INIT BREEZE (AUTO)
+# --------------------------------
+@st.cache_resource
+def init_breeze():
+    breeze = BreezeConnect(
+        api_key=st.secrets["BREEZE_API_KEY"]
     )
-
-    breeze_api_secret = st.text_input(
-        "Breeze API Secret",
-        value=st.secrets.get("BREEZE_API_SECRET", ""),
-        type="password"
-    )
-
-    session_token = st.text_input(
-        "Session Token (from Breeze login)",
-        type="password",
-        help="Login to ICICI Breeze → Copy session token → Paste here"
-    )
-
-    connect_btn = st.button("Connect Breeze")
-
-# -------------------------------
-# INIT BREEZE
-# -------------------------------
-@st.cache_resource(show_spinner=False)
-def init_breeze(api_key, api_secret, session_token):
-    breeze = BreezeConnect(api_key=api_key)
     breeze.generate_session(
-        api_secret=api_secret,
-        session_token=session_token
+        api_secret=st.secrets["BREEZE_API_SECRET"],
+        session_token=st.secrets["BREEZE_SESSION_TOKEN"]
     )
     return breeze
 
-breeze = None
-if connect_btn:
-    if breeze_api_key and breeze_api_secret and session_token:
-        try:
-            breeze = init_breeze(
-                breeze_api_key,
-                breeze_api_secret,
-                session_token
-            )
-            st.sidebar.success("✅ Breeze Connected")
-        except Exception as e:
-            st.sidebar.error(f"❌ Connection failed: {e}")
-    else:
-        st.sidebar.warning("⚠️ Fill all Breeze credentials")
+try:
+    breeze = init_breeze()
+    st.success("✅ Connected to Breeze")
+except Exception as e:
+    st.error("❌ Breeze connection failed. Check session token.")
+    st.stop()
 
-# -------------------------------
-# MARKET INPUT
-# -------------------------------
+# --------------------------------
+# USER QUERY
+# --------------------------------
 symbol = st.text_input("Stock Symbol", "RELIANCE")
 exchange = st.selectbox("Exchange", ["NSE", "BSE"])
 interval = st.selectbox("OHLC Interval", ["1minute", "5minute", "15minute"])
 
 analyze = st.button("Analyze Market")
 
-# -------------------------------
-# DATA FETCHING
-# -------------------------------
-def fetch_market_data(breeze):
+# --------------------------------
+# DATA FETCH
+# --------------------------------
+def fetch_market_data():
     ltp = breeze.get_quotes(
         stock_code=symbol,
         exchange_code=exchange,
@@ -98,9 +66,9 @@ def fetch_market_data(breeze):
         "ohlc": ohlc
     }
 
-# -------------------------------
+# --------------------------------
 # LLM CALL
-# -------------------------------
+# --------------------------------
 def ask_llm(market_data):
     prompt = f"""
 You are an expert trading analyst.
@@ -108,14 +76,14 @@ You are an expert trading analyst.
 Market Data:
 {json.dumps(market_data, indent=2)}
 
-Provide:
-• Trend
-• Momentum
-• Support / Resistance
-• Risk Level
-• Buy / Sell / Hold decision
+Return:
+1. Trend
+2. Momentum
+3. Support & Resistance
+4. Risk Level
+5. Clear Buy / Sell / Hold
 
-Be concise and practical.
+Be short, decisive, and practical.
 """
 
     headers = {
@@ -126,7 +94,7 @@ Be concise and practical.
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": [
-            {"role": "system", "content": "You are a professional stock trading assistant."},
+            {"role": "system", "content": "You are a professional trading assistant."},
             {"role": "user", "content": prompt}
         ]
     }
@@ -138,23 +106,21 @@ Be concise and practical.
         timeout=60
     )
 
+    response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
-# -------------------------------
-# MAIN LOGIC
-# -------------------------------
+# --------------------------------
+# MAIN FLOW
+# --------------------------------
 if analyze:
-    if not breeze:
-        st.error("⚠️ Please connect Breeze first.")
-    else:
-        with st.spinner("Fetching market data..."):
-            market_data = fetch_market_data(breeze)
+    with st.spinner("📡 Fetching live market data..."):
+        market_data = fetch_market_data()
 
-        st.subheader("📊 Market Data")
-        st.json(market_data)
+    st.subheader("📊 Market Data")
+    st.json(market_data)
 
-        with st.spinner("Analyzing with AI..."):
-            insight = ask_llm(market_data)
+    with st.spinner("🧠 AI is analyzing..."):
+        insight = ask_llm(market_data)
 
-        st.subheader("🤖 AI Insight")
-        st.markdown(insight)
+    st.subheader("🤖 AI Trading Insight")
+    st.markdown(insight)
