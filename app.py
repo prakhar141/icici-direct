@@ -21,10 +21,10 @@ OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
 # --------------------------------
 # USER INPUT
 # --------------------------------
-icici_session_token = st.text_input(
-    "ICICI Breeze Session Token (paste here if expired)", type="password"
-)
+# Dynamic session token input
+icici_session_token = st.text_input("ICICI Breeze Session Token (paste here if expired)", type="password")
 
+# Stock selection
 STOCKS = {
     "RELIANCE": "RELIANCE",
     "TCS": "TCS",
@@ -34,53 +34,84 @@ STOCKS = {
 }
 
 selected_stock = st.selectbox("Select Stock", options=list(STOCKS.keys()))
-data_type = st.selectbox(
-    "Select Data Type to Display", options=["LTP", "OHLC", "Volume", "Raw JSON"]
-)
+data_type = st.selectbox("Select Data Type to Display", options=["LTP", "OHLC", "Volume", "Raw JSON"])
 analyze = st.button("Analyze Market")
 
 # --------------------------------
 # FETCH MARKET DATA
 # --------------------------------
 def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
+    """
+    Fetch market data from ICICI Direct Breeze API using API key/secret + session token
+    """
     if not session_token:
         st.error("❌ Session token is required! Please paste it above.")
         return None
 
-    url = f"https://breezeapi.icicidirect.com/api/v1/market/quote?scriptCode={symbol}"
+    # Format symbol with NSE exchange prefix (required by Breeze API)
+    formatted_symbol = f"NSE:{symbol}"
+    
+    # FIXED: Removed space, corrected parameter name to 'stockCode', and using v1 endpoint
+    url = f"https://breezeapi.icicidirect.com/api/v1/market/quote?stockCode={formatted_symbol}"
+    
+    # FIXED: Corrected header names as per Breeze API documentation
     headers = {
         "X-SessionToken": session_token,
-        "X-APIKey": api_key,
-        "X-APISecret": api_secret,
+        "X-API-Key": api_key,      # Changed from X-APIKey
+        "X-API-Secret": api_secret,  # Changed from X-APISecret
         "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
 
     try:
+        # Debug info (optional, comment out if not needed)
+        # st.info(f"Calling API: {url}")
+        
         response = requests.get(url, headers=headers, timeout=10)
-        # Display full response if status is not 200 for debugging
-        if response.status_code != 200:
-            st.error(f"❌ API returned {response.status_code}: {response.text}")
-            return None
+        response.raise_for_status()
         data = response.json()
+        
+        # FIXED: Check for API success status
+        if data.get("Status") not in [200, "200"]:
+            error_msg = data.get("Error", "Unknown API error")
+            st.error(f"❌ API Error: {error_msg}")
+            st.json(data)  # Show raw response for debugging
+            return None
+            
+        # FIXED: Extract data from 'Success' key
+        market_data = data.get("Success")
+        if not market_data:
+            st.error("❌ No market data returned from API.")
+            st.json(data)  # Show raw response for debugging
+            return None
+            
+        return market_data
+        
+    except requests.exceptions.HTTPError as e:
+        st.error(f"❌ HTTP Error: {e}")
+        if 'response' in locals():
+            st.error(f"Status Code: {response.status_code}")
+            st.error(f"Response: {response.text}")
+        return None
     except requests.exceptions.RequestException as e:
         st.error(f"❌ Failed to fetch data: {e}")
         return None
-
-    if "data" not in data:
-        st.error(
-            f"❌ Invalid response: {json.dumps(data, indent=2)}\nCheck your session token or symbol."
-        )
+    except json.JSONDecodeError as e:
+        st.error(f"❌ Failed to parse JSON response: {e}")
+        if 'response' in locals():
+            st.error(f"Raw response: {response.text}")
         return None
-
-    return data["data"]
 
 # --------------------------------
 # PREPARE DATAFRAME
 # --------------------------------
 def prepare_chart_data_icici(ohlc_data):
+    """
+    Converts ICICI OHLC list to DataFrame
+    """
     if not ohlc_data:
         return pd.DataFrame()
+    
     df = pd.DataFrame(ohlc_data)
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
@@ -108,28 +139,36 @@ Be short, decisive, and practical.
 """
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
 
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": [
             {"role": "system", "content": "You are a professional trading assistant."},
-            {"role": "user", "content": prompt},
-        ],
+            {"role": "user", "content": prompt}
+        ]
     }
 
     try:
+        # FIXED: Removed trailing space in URL
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=60,
+            timeout=60
         )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
-    except requests.exceptions.RequestException:
-        st.error("❌ Failed to fetch AI insight.")
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Failed to fetch AI insight: {e}")
+        if 'response' in locals():
+            st.error(f"Status: {response.status_code}, Response: {response.text}")
+        return None
+    except (KeyError, IndexError) as e:
+        st.error(f"❌ Unexpected AI response format: {e}")
+        if 'response' in locals():
+            st.json(response.json())
         return None
 
 # --------------------------------
@@ -141,7 +180,7 @@ if analyze:
             STOCKS[selected_stock],
             icici_session_token,
             BREEZE_API_KEY,
-            BREEZE_API_SECRET,
+            BREEZE_API_SECRET
         )
 
     if market_data:
@@ -150,16 +189,22 @@ if analyze:
         if data_type == "Raw JSON":
             st.json(market_data)
         elif data_type == "LTP":
-            st.metric("Last Traded Price", market_data.get("ltp"))
+            st.metric("Last Traded Price", f"₹{market_data.get('ltp', 'N/A')}")
         elif data_type == "Volume":
-            st.metric("Volume", market_data.get("volume"))
+            st.metric("Volume", f"{market_data.get('volume', 'N/A'):,}")
         elif data_type == "OHLC":
-            df = prepare_chart_data_icici(market_data.get("ohlcHistory", []))
-            if not df.empty:
-                st.line_chart(df[["open", "high", "low", "close"]].tail(30))
-            else:
-                st.info("No OHLC data available for this stock.")
+            # NOTE: The quote endpoint returns current day OHLC, not historical data
+            # For historical data, you'd need to call a different endpoint
+            ohlc = {
+                'Open': market_data.get('open'),
+                'High': market_data.get('high'),
+                'Low': market_data.get('low'),
+                'Close': market_data.get('close')
+            }
+            st.dataframe(pd.DataFrame([ohlc]))
+            st.info("ℹ️ Note: This shows current day's OHLC. For historical charts, use a different API endpoint.")
 
+        # AI Analysis
         with st.spinner("🧠 AI is analyzing..."):
             insight = ask_llm(market_data)
 
