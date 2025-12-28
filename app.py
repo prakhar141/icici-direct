@@ -16,32 +16,41 @@ st.title("📈 AI Trading Assistant")
 # USER QUERY
 # --------------------------------
 symbol = st.text_input("Stock Symbol", "RELIANCE")
-interval = st.selectbox("OHLC Interval", ["1min", "5min", "15min", "30min", "60min"])
-
 analyze = st.button("Analyze Market")
 
 # --------------------------------
 # DATA FETCH
 # --------------------------------
-def fetch_market_data(symbol, interval):
-    # Fetch intraday OHLC
-    ohlc_url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={ALPHAVANTAGE_API_KEY}&outputsize=compact"
-    ohlc_response = requests.get(ohlc_url)
-    ohlc_response.raise_for_status()
-    ohlc_data = ohlc_response.json()
+def fetch_market_data(symbol):
+    """
+    Fetch daily OHLC and latest price (LTP) from Alpha Vantage.
+    Free API key supported.
+    """
+    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}&outputsize=compact"
     
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException:
+        st.error("❌ Failed to fetch data from Alpha Vantage.")
+        return None
+
+    if "Time Series (Daily)" not in data:
+        st.error("❌ Alpha Vantage error or invalid symbol. Free accounts only allow daily data.")
+        return None
+
     # Get latest price (LTP)
     try:
-        time_series_key = f"Time Series ({interval})"
-        latest_timestamp = max(ohlc_data[time_series_key].keys())
-        latest_data = ohlc_data[time_series_key][latest_timestamp]
+        latest_date = max(data["Time Series (Daily)"].keys())
+        latest_data = data["Time Series (Daily)"][latest_date]
         ltp = float(latest_data["4. close"])
-    except KeyError:
+    except Exception:
         ltp = None
 
     return {
         "ltp": ltp,
-        "ohlc": ohlc_data
+        "ohlc": data
     }
 
 # --------------------------------
@@ -77,28 +86,33 @@ Be short, decisive, and practical.
         ]
     }
 
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=60
-    )
-
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.RequestException:
+        st.error("❌ Failed to fetch AI insight. Check your API key or network.")
+        return None
 
 # --------------------------------
 # MAIN FLOW
 # --------------------------------
 if analyze:
-    with st.spinner("📡 Fetching live market data..."):
-        market_data = fetch_market_data(symbol, interval)
+    with st.spinner("📡 Fetching daily market data..."):
+        market_data = fetch_market_data(symbol)
+    
+    if market_data:
+        st.subheader("📊 Market Data")
+        st.json(market_data)
 
-    st.subheader("📊 Market Data")
-    st.json(market_data)
+        with st.spinner("🧠 AI is analyzing..."):
+            insight = ask_llm(market_data)
 
-    with st.spinner("🧠 AI is analyzing..."):
-        insight = ask_llm(market_data)
-
-    st.subheader("🤖 AI Trading Insight")
-    st.markdown(insight)
+        if insight:
+            st.subheader("🤖 AI Trading Insight")
+            st.markdown(insight)
