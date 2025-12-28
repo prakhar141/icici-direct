@@ -46,79 +46,53 @@ def generate_checksum(timestamp, payload, secret_key):
     """Generate SHA256 checksum for Breeze API authentication"""
     data = timestamp + payload + secret_key
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
-
 def fetch_market_data_icici(symbol, exchange, session_token, api_key, api_secret):
     """
-    Fetch market data from ICICI Direct Breeze API using proper authentication
+    Document-correct call to /quotes
     """
     if not session_token:
-        st.error("❌ Session token is required! Please paste it above.")
+        st.error("❌ Session token required")
         return None
 
-    # ✅ CORRECT API endpoint from official documentation
-    url = "https://api.icicidirect.com/breezeapi/api/v1/quotes"
-    
-    # ✅ REQUIRED payload structure
+    # 1.  exact JSON body (no spaces) -----------------------------
     payload_dict = {
         "stock_code": symbol,
-        "exchange_code": exchange
+        "exchange_code": exchange,
+        "product_type": "cash",
+        "right": "Others",
+        "strike_price": "0"
     }
-    payload = json.dumps(payload_dict)
-    
-    # ✅ Generate timestamp
-    timestamp = datetime.utcnow().isoformat()[:19] + '.000Z'
-    
-    # ✅ CRITICAL: Generate checksum - this is REQUIRED for authentication
-    checksum = generate_checksum(timestamp, payload, api_secret)
-    
-    # ✅ CORRECT headers with all required fields
+    payload_str = json.dumps(payload_dict, separators=(",", ":"))   # ≡ document requirement
+
+    # 2.  timestamp in UTC with 0 ms ------------------------------
+    timestamp = dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    # 3.  checksum ≡ SHA256(timestamp + payload_str + secret) ----
+    checksum = hashlib.sha256((timestamp + payload_str + api_secret).encode()).hexdigest()
+
+    # 4.  headers (document pattern) ------------------------------
     headers = {
         "Content-Type": "application/json",
-        "X-Checksum": f"token {checksum}",  # Format: "token {checksum_value}"
+        "X-Checksum": f"token {checksum}",
         "X-Timestamp": timestamp,
         "X-AppKey": api_key,
-        "X-SessionToken": session_token,
-        "User-Agent": "Mozilla/5.0"
+        "X-SessionToken": session_token
     }
 
+    # 5.  GET request with JSON body (document style) -------------
+    url = "https://api.icicidirect.com/breezeapi/api/v1/quotes"
     try:
-        # Use GET request with data payload (as per API docs)
-        response = requests.get(url, headers=headers, data=payload, timeout=10)
-        response.raise_for_status()
-        
-        result = response.json()
-        
-        # Check API status
-        status = result.get("Status")
-        if status not in [200, "200"]:
-            error_msg = result.get("Error", "Unknown API error")
-            st.error(f"❌ API Error: {error_msg}")
-            st.json(result)  # Show raw response for debugging
+        resp = requests.get(url, headers=headers, data=payload_str, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("Status") == 200:
+            return data.get("Success")
+        else:
+            st.error(f"API error: {data.get('Error')}")
             return None
-            
-        # Extract data from Success key
-        market_data = result.get("Success")
-        if not market_data:
-            st.error("❌ No market data returned from API.")
-            return None
-            
-        return market_data
-        
-    except requests.exceptions.HTTPError as e:
-        st.error(f"❌ HTTP Error: {e}")
-        if 'response' in locals():
-            st.error(f"Status Code: {response.status_code}")
-            st.error(f"Response: {response.text}")
+    except Exception as e:
+        st.error(f"Request failed: {e}")
         return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ Failed to fetch data: {e}")
-        return None
-    except json.JSONDecodeError as e:
-        st.error(f"❌ Failed to parse JSON response: {e}")
-        if 'response' in locals():
-            st.error(f"Raw response: {response.text}")
-        return None
-
 # --------------------------------
 # CALL AI LLM
 # --------------------------------
