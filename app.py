@@ -42,19 +42,32 @@ analyze = st.button("Analyze Market")
 # --------------------------------
 # FETCH MARKET DATA
 # --------------------------------
-def generate_checksum(timestamp, payload, secret_key):
-    """Generate SHA256 checksum for Breeze API authentication"""
-    data = timestamp + payload + secret_key
-    return hashlib.sha256(data.encode("utf-8")).hexdigest()
-def fetch_market_data_icici(symbol, exchange, session_token, api_key, api_secret):
+# ----------------------------------------------------------
+# 1.  checksum helper (document formula)
+# ----------------------------------------------------------
+def generate_checksum(timestamp: str, payload: str, secret_key: str) -> str:
     """
-    Document-correct call to /quotes
+    ICICI document:  SHA256( timestamp + JSON-body + secret_key )
+    payload must be the **same** JSON string that goes into the request body.
+    """
+    hash_str = timestamp + payload + secret_key
+    return hashlib.sha256(hash_str.encode("utf-8")).hexdigest()
+
+
+# ----------------------------------------------------------
+# 2.  market-data fetcher (document-compliant)
+# ----------------------------------------------------------
+def fetch_market_data_icici(symbol: str, exchange: str, session_token: str,
+                            api_key: str, api_secret: str):
+    """
+    Calls  /breezeapi/api/v1/quotes  with document-mandatory headers.
+    Returns the 'Success' block or None.
     """
     if not session_token:
         st.error("❌ Session token required")
         return None
 
-    # 1.  exact JSON body (no spaces) -----------------------------
+    # 1.  request body (exact JSON, no spaces)
     payload_dict = {
         "stock_code": symbol,
         "exchange_code": exchange,
@@ -62,15 +75,15 @@ def fetch_market_data_icici(symbol, exchange, session_token, api_key, api_secret
         "right": "Others",
         "strike_price": "0"
     }
-    payload_str = json.dumps(payload_dict, separators=(",", ":"))   # ≡ document requirement
+    payload_str = json.dumps(payload_dict, separators=(",", ":"))   # ≡ doc requirement
 
-    # 2.  timestamp in UTC with 0 ms ------------------------------
-    timestamp = dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    # 2.  timestamp (UTC, zero milliseconds)
+    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    # 3.  checksum ≡ SHA256(timestamp + payload_str + secret) ----
-    checksum = hashlib.sha256((timestamp + payload_str + api_secret).encode()).hexdigest()
+    # 3.  checksum
+    checksum = generate_checksum(timestamp, payload_str, api_secret)
 
-    # 4.  headers (document pattern) ------------------------------
+    # 4.  headers (document pattern)
     headers = {
         "Content-Type": "application/json",
         "X-Checksum": f"token {checksum}",
@@ -79,7 +92,7 @@ def fetch_market_data_icici(symbol, exchange, session_token, api_key, api_secret
         "X-SessionToken": session_token
     }
 
-    # 5.  GET request with JSON body (document style) -------------
+    # 5.  GET request (with JSON body, per doc)
     url = "https://api.icicidirect.com/breezeapi/api/v1/quotes"
     try:
         resp = requests.get(url, headers=headers, data=payload_str, timeout=10)
@@ -90,7 +103,7 @@ def fetch_market_data_icici(symbol, exchange, session_token, api_key, api_secret
         else:
             st.error(f"API error: {data.get('Error')}")
             return None
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         st.error(f"Request failed: {e}")
         return None
 # --------------------------------
