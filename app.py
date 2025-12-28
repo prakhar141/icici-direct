@@ -40,7 +40,7 @@ def breeze_quote(symbol, exch, session, app_key, secret):
         'X-SessionToken' : session
     }
 
-    url = "https://api.icicidirect.com/breezeapi/api/v1/quotes"
+    url = "https://api.icicidirect.com/breezeapi/api/v1/quotes"   # ← no space
     try:
         r = requests.get(url, headers=hdr, data=body, timeout=10)
         r.raise_for_status()
