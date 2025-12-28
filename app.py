@@ -14,13 +14,15 @@ st.title("📈 AI Trading Assistant (ICICI Breeze API)")
 # --------------------------------
 # SECRETS
 # --------------------------------
+BREEZE_API_KEY = st.secrets["BREEZE_API_KEY"]
+BREEZE_API_SECRET = st.secrets["BREEZE_API_SECRET"]
 ICICI_SESSION = st.secrets["ICICI_SESSION_TOKEN"]
 OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
 
 # --------------------------------
 # STOCK SELECTION
 # --------------------------------
-# You can expand this list with more NSE/BSE stocks
+# Expand this list as needed
 STOCKS = {
     "RELIANCE": "RELIANCE",
     "TCS": "TCS",
@@ -37,13 +39,15 @@ analyze = st.button("Analyze Market")
 # --------------------------------
 # FETCH MARKET DATA
 # --------------------------------
-def fetch_market_data_icici(symbol, session_token):
+def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
     """
-    Fetch market data from ICICI Direct Breeze API
+    Fetch market data from ICICI Direct Breeze API using API key/secret + session token
     """
     url = f"https://breezeapi.icicidirect.com/api/v1/market/quote?scriptCode={symbol}"
     headers = {
-        "X-SessionToken": session_token
+        "X-SessionToken": session_token,
+        "X-APIKey": api_key,
+        "X-APISecret": api_secret
     }
 
     try:
@@ -55,7 +59,7 @@ def fetch_market_data_icici(symbol, session_token):
         return None
 
     if "data" not in data:
-        st.error(data.get("message") or "❌ Invalid symbol or session token.")
+        st.error(data.get("message") or "❌ Invalid symbol or credentials.")
         return None
 
     return data["data"]
@@ -126,7 +130,12 @@ Be short, decisive, and practical.
 # --------------------------------
 if analyze:
     with st.spinner("📡 Fetching market data..."):
-        market_data = fetch_market_data_icici(STOCKS[selected_stock], ICICI_SESSION)
+        market_data = fetch_market_data_icici(
+            STOCKS[selected_stock],
+            ICICI_SESSION,
+            BREEZE_API_KEY,
+            BREEZE_API_SECRET
+        )
 
     if market_data:
         st.subheader(f"📊 Market Data for {selected_stock}")
