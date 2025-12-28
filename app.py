@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
+import hashlib
+from datetime import datetime
 
 # --------------------------------
 # CONFIG
@@ -21,18 +23,18 @@ OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
 # --------------------------------
 # USER INPUT
 # --------------------------------
-# Dynamic session token input
 icici_session_token = st.text_input("ICICI Breeze Session Token (paste here if expired)", type="password")
 
-# Stock selection
 STOCKS = {
     "RELIANCE": "RELIANCE",
-    "TCS": "TCS",
+    "TCS": "TCS", 
     "INFY": "INFY",
     "HDFCBANK": "HDFCBANK",
     "ICICIBANK": "ICICIBANK"
 }
 
+EXCHANGES = ["NSE", "BSE", "NFO"]
+selected_exchange = st.selectbox("Select Exchange", options=EXCHANGES, index=0)
 selected_stock = st.selectbox("Select Stock", options=list(STOCKS.keys()))
 data_type = st.selectbox("Select Data Type to Display", options=["LTP", "OHLC", "Volume", "Raw JSON"])
 analyze = st.button("Analyze Market")
@@ -40,49 +42,64 @@ analyze = st.button("Analyze Market")
 # --------------------------------
 # FETCH MARKET DATA
 # --------------------------------
-def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
+def generate_checksum(timestamp, payload, secret_key):
+    """Generate SHA256 checksum for Breeze API authentication"""
+    data = timestamp + payload + secret_key
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+def fetch_market_data_icici(symbol, exchange, session_token, api_key, api_secret):
     """
-    Fetch market data from ICICI Direct Breeze API using API key/secret + session token
+    Fetch market data from ICICI Direct Breeze API using proper authentication
     """
     if not session_token:
         st.error("❌ Session token is required! Please paste it above.")
         return None
 
-    # Format symbol with NSE exchange prefix (required by Breeze API)
-    formatted_symbol = f"NSE:{symbol}"
+    # ✅ CORRECT API endpoint from official documentation
+    url = "https://api.icicidirect.com/breezeapi/api/v1/quotes"
     
-    # FIXED: Removed space, corrected parameter name to 'stockCode', and using v1 endpoint
-    url = f"https://breezeapi.icicidirect.com/api/v1/market/quote?stockCode={formatted_symbol}"
+    # ✅ REQUIRED payload structure
+    payload_dict = {
+        "stock_code": symbol,
+        "exchange_code": exchange
+    }
+    payload = json.dumps(payload_dict)
     
-    # FIXED: Corrected header names as per Breeze API documentation
+    # ✅ Generate timestamp
+    timestamp = datetime.utcnow().isoformat()[:19] + '.000Z'
+    
+    # ✅ CRITICAL: Generate checksum - this is REQUIRED for authentication
+    checksum = generate_checksum(timestamp, payload, api_secret)
+    
+    # ✅ CORRECT headers with all required fields
     headers = {
+        "Content-Type": "application/json",
+        "X-Checksum": f"token {checksum}",  # Format: "token {checksum_value}"
+        "X-Timestamp": timestamp,
+        "X-AppKey": api_key,
         "X-SessionToken": session_token,
-        "X-API-Key": api_key,      # Changed from X-APIKey
-        "X-API-Secret": api_secret,  # Changed from X-APISecret
-        "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/json"
+        "User-Agent": "Mozilla/5.0"
     }
 
     try:
-        # Debug info (optional, comment out if not needed)
-        # st.info(f"Calling API: {url}")
-        
-        response = requests.get(url, headers=headers, timeout=10)
+        # Use GET request with data payload (as per API docs)
+        response = requests.get(url, headers=headers, data=payload, timeout=10)
         response.raise_for_status()
-        data = response.json()
         
-        # FIXED: Check for API success status
-        if data.get("Status") not in [200, "200"]:
-            error_msg = data.get("Error", "Unknown API error")
+        result = response.json()
+        
+        # Check API status
+        status = result.get("Status")
+        if status not in [200, "200"]:
+            error_msg = result.get("Error", "Unknown API error")
             st.error(f"❌ API Error: {error_msg}")
-            st.json(data)  # Show raw response for debugging
+            st.json(result)  # Show raw response for debugging
             return None
             
-        # FIXED: Extract data from 'Success' key
-        market_data = data.get("Success")
+        # Extract data from Success key
+        market_data = result.get("Success")
         if not market_data:
             st.error("❌ No market data returned from API.")
-            st.json(data)  # Show raw response for debugging
             return None
             
         return market_data
@@ -101,22 +118,6 @@ def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
         if 'response' in locals():
             st.error(f"Raw response: {response.text}")
         return None
-
-# --------------------------------
-# PREPARE DATAFRAME
-# --------------------------------
-def prepare_chart_data_icici(ohlc_data):
-    """
-    Converts ICICI OHLC list to DataFrame
-    """
-    if not ohlc_data:
-        return pd.DataFrame()
-    
-    df = pd.DataFrame(ohlc_data)
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date')
-    df = df.set_index('date')
-    return df
 
 # --------------------------------
 # CALL AI LLM
@@ -151,7 +152,6 @@ Be short, decisive, and practical.
     }
 
     try:
-        # FIXED: Removed trailing space in URL
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
@@ -162,13 +162,6 @@ Be short, decisive, and practical.
         return response.json()["choices"][0]["message"]["content"]
     except requests.exceptions.RequestException as e:
         st.error(f"❌ Failed to fetch AI insight: {e}")
-        if 'response' in locals():
-            st.error(f"Status: {response.status_code}, Response: {response.text}")
-        return None
-    except (KeyError, IndexError) as e:
-        st.error(f"❌ Unexpected AI response format: {e}")
-        if 'response' in locals():
-            st.json(response.json())
         return None
 
 # --------------------------------
@@ -178,31 +171,44 @@ if analyze:
     with st.spinner("📡 Fetching market data..."):
         market_data = fetch_market_data_icici(
             STOCKS[selected_stock],
+            selected_exchange,
             icici_session_token,
             BREEZE_API_KEY,
             BREEZE_API_SECRET
         )
 
     if market_data:
-        st.subheader(f"📊 Market Data for {selected_stock}")
+        st.subheader(f"📊 Market Data for {selected_stock} ({selected_exchange})")
 
         if data_type == "Raw JSON":
             st.json(market_data)
         elif data_type == "LTP":
-            st.metric("Last Traded Price", f"₹{market_data.get('ltp', 'N/A')}")
+            if isinstance(market_data, list) and len(market_data) > 0:
+                ltp = market_data[0].get('ltp', 'N/A')
+            else:
+                ltp = market_data.get('ltp', 'N/A')
+            st.metric("Last Traded Price", f"₹{ltp}")
         elif data_type == "Volume":
-            st.metric("Volume", f"{market_data.get('volume', 'N/A'):,}")
+            if isinstance(market_data, list) and len(market_data) > 0:
+                volume = market_data[0].get('total_quantity_traded', 'N/A')
+            else:
+                volume = market_data.get('total_quantity_traded', 'N/A')
+            st.metric("Volume", f"{volume:,}" if isinstance(volume, (int, float)) else volume)
         elif data_type == "OHLC":
-            # NOTE: The quote endpoint returns current day OHLC, not historical data
-            # For historical data, you'd need to call a different endpoint
+            if isinstance(market_data, list) and len(market_data) > 0:
+                data = market_data[0]
+            else:
+                data = market_data
+            
             ohlc = {
-                'Open': market_data.get('open'),
-                'High': market_data.get('high'),
-                'Low': market_data.get('low'),
-                'Close': market_data.get('close')
+                'Open': data.get('open'),
+                'High': data.get('high'),
+                'Low': data.get('low'),
+                'Close': data.get('close'),
+                'Previous Close': data.get('previous_close')
             }
             st.dataframe(pd.DataFrame([ohlc]))
-            st.info("ℹ️ Note: This shows current day's OHLC. For historical charts, use a different API endpoint.")
+            st.info("ℹ️ Note: Shows current day's OHLC. For historical data, use /historicaldata endpoint.")
 
         # AI Analysis
         with st.spinner("🧠 AI is analyzing..."):
