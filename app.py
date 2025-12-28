@@ -1,71 +1,79 @@
 import streamlit as st
 import requests
 import json
-from datetime import datetime
 import pandas as pd
 
 # --------------------------------
 # CONFIG
 # --------------------------------
 OPENROUTER_MODEL = "moonshotai/kimi-k2:free"
-ALPHAVANTAGE_API_KEY = st.secrets["ALPHAVANTAGE_API_KEY"]
 
-st.set_page_config(page_title="AI Trading Assistant", layout="wide")
-st.title("📈 AI Trading Assistant (Free API)")
+st.set_page_config(page_title="AI Trading Assistant (ICICI Breeze)", layout="wide")
+st.title("📈 AI Trading Assistant (ICICI Breeze API)")
 
 # --------------------------------
-# USER INPUT
+# SECRETS
 # --------------------------------
-symbol = st.text_input("Stock Symbol (use .NS for NSE, .BO for BSE)", "RELIANCE.NS")
+ICICI_SESSION = st.secrets["ICICI_SESSION_TOKEN"]
+OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
+
+# --------------------------------
+# STOCK SELECTION
+# --------------------------------
+# You can expand this list with more NSE/BSE stocks
+STOCKS = {
+    "RELIANCE": "RELIANCE",
+    "TCS": "TCS",
+    "INFY": "INFY",
+    "HDFCBANK": "HDFCBANK",
+    "ICICIBANK": "ICICIBANK"
+}
+
+selected_stock = st.selectbox("Select Stock", options=list(STOCKS.keys()))
+data_type = st.selectbox("Select Data Type to Display", options=["LTP", "OHLC", "Volume", "Raw JSON"])
+
 analyze = st.button("Analyze Market")
 
 # --------------------------------
 # FETCH MARKET DATA
 # --------------------------------
-def fetch_market_data(symbol):
+def fetch_market_data_icici(symbol, session_token):
     """
-    Fetch daily OHLC data from Alpha Vantage (free API)
+    Fetch market data from ICICI Direct Breeze API
     """
-    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}&outputsize=compact"
-    
+    url = f"https://breezeapi.icicidirect.com/api/v1/market/quote?scriptCode={symbol}"
+    headers = {
+        "X-SessionToken": session_token
+    }
+
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException:
-        st.error("❌ Failed to fetch data from Alpha Vantage.")
+        st.error("❌ Failed to fetch data from ICICI Direct Breeze API.")
         return None
 
-    # Handle errors from API
-    if "Time Series (Daily)" not in data:
-        st.error(data.get("Note") or data.get("Error Message") or "❌ Invalid symbol or free endpoint limit reached.")
+    if "data" not in data:
+        st.error(data.get("message") or "❌ Invalid symbol or session token.")
         return None
 
-    # Get LTP (latest close price)
-    try:
-        latest_date = max(data["Time Series (Daily)"].keys())
-        latest_data = data["Time Series (Daily)"][latest_date]
-        ltp = float(latest_data["4. close"])
-    except Exception:
-        ltp = None
-
-    return {
-        "ltp": ltp,
-        "ohlc": data
-    }
+    return data["data"]
 
 # --------------------------------
-# PREPARE DATA FOR VISUALIZATION
+# PREPARE DATAFRAME
 # --------------------------------
-def prepare_chart_data(ohlc_data):
+def prepare_chart_data_icici(ohlc_data):
     """
-    Converts OHLC JSON to DataFrame for plotting
+    Converts ICICI OHLC list to DataFrame
     """
-    ts = ohlc_data.get("Time Series (Daily)", {})
-    df = pd.DataFrame(ts).T  # transpose
-    df.index = pd.to_datetime(df.index)
-    df = df.sort_index()
-    df = df.astype(float)
+    if not ohlc_data:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(ohlc_data)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date')
+    df = df.set_index('date')
     return df
 
 # --------------------------------
@@ -88,7 +96,7 @@ Return:
 Be short, decisive, and practical.
 """
     headers = {
-        "Authorization": f"Bearer {st.secrets['OPENROUTER_API_KEY']}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
 
@@ -117,17 +125,24 @@ Be short, decisive, and practical.
 # MAIN FLOW
 # --------------------------------
 if analyze:
-    with st.spinner("📡 Fetching daily market data..."):
-        market_data = fetch_market_data(symbol)
+    with st.spinner("📡 Fetching market data..."):
+        market_data = fetch_market_data_icici(STOCKS[selected_stock], ICICI_SESSION)
 
     if market_data:
-        st.subheader("📊 Market Data")
-        st.json(market_data)
+        st.subheader(f"📊 Market Data for {selected_stock}")
 
-        # Prepare chart
-        df = prepare_chart_data(market_data["ohlc"])
-        st.subheader("📈 Price Chart (Last 30 Days)")
-        st.line_chart(df["4. close"].tail(30))
+        if data_type == "Raw JSON":
+            st.json(market_data)
+        elif data_type == "LTP":
+            st.metric("Last Traded Price", market_data.get("ltp"))
+        elif data_type == "Volume":
+            st.metric("Volume", market_data.get("volume"))
+        elif data_type == "OHLC":
+            df = prepare_chart_data_icici(market_data.get("ohlcHistory", []))
+            if not df.empty:
+                st.line_chart(df[["open","high","low","close"]].tail(30))
+            else:
+                st.info("No OHLC data available for this stock.")
 
         # AI Analysis
         with st.spinner("🧠 AI is analyzing..."):
