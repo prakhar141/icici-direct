@@ -21,10 +21,10 @@ OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
 # --------------------------------
 # USER INPUT
 # --------------------------------
-# Dynamic session token input
-icici_session_token = st.text_input("ICICI Breeze Session Token (paste here if expired)", type="password")
+icici_session_token = st.text_input(
+    "ICICI Breeze Session Token (paste here if expired)", type="password"
+)
 
-# Stock selection
 STOCKS = {
     "RELIANCE": "RELIANCE",
     "TCS": "TCS",
@@ -34,16 +34,15 @@ STOCKS = {
 }
 
 selected_stock = st.selectbox("Select Stock", options=list(STOCKS.keys()))
-data_type = st.selectbox("Select Data Type to Display", options=["LTP", "OHLC", "Volume", "Raw JSON"])
+data_type = st.selectbox(
+    "Select Data Type to Display", options=["LTP", "OHLC", "Volume", "Raw JSON"]
+)
 analyze = st.button("Analyze Market")
 
 # --------------------------------
 # FETCH MARKET DATA
 # --------------------------------
 def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
-    """
-    Fetch market data from ICICI Direct Breeze API using API key/secret + session token
-    """
     if not session_token:
         st.error("❌ Session token is required! Please paste it above.")
         return None
@@ -53,20 +52,25 @@ def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
         "X-SessionToken": session_token,
         "X-APIKey": api_key,
         "X-APISecret": api_secret,
-        "User-Agent": "Mozilla/5.0",  # Sometimes required
-        "Content-Type": "application/json"
+        "User-Agent": "Mozilla/5.0",
+        "Content-Type": "application/json",
     }
 
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
+        # Display full response if status is not 200 for debugging
+        if response.status_code != 200:
+            st.error(f"❌ API returned {response.status_code}: {response.text}")
+            return None
         data = response.json()
     except requests.exceptions.RequestException as e:
         st.error(f"❌ Failed to fetch data: {e}")
         return None
 
     if "data" not in data:
-        st.error(data.get("message") or "❌ Invalid symbol or session token.")
+        st.error(
+            f"❌ Invalid response: {json.dumps(data, indent=2)}\nCheck your session token or symbol."
+        )
         return None
 
     return data["data"]
@@ -75,12 +79,8 @@ def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
 # PREPARE DATAFRAME
 # --------------------------------
 def prepare_chart_data_icici(ohlc_data):
-    """
-    Converts ICICI OHLC list to DataFrame
-    """
     if not ohlc_data:
         return pd.DataFrame()
-    
     df = pd.DataFrame(ohlc_data)
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
@@ -108,15 +108,15 @@ Be short, decisive, and practical.
 """
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": [
             {"role": "system", "content": "You are a professional trading assistant."},
-            {"role": "user", "content": prompt}
-        ]
+            {"role": "user", "content": prompt},
+        ],
     }
 
     try:
@@ -124,7 +124,7 @@ Be short, decisive, and practical.
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=60
+            timeout=60,
         )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
@@ -141,7 +141,7 @@ if analyze:
             STOCKS[selected_stock],
             icici_session_token,
             BREEZE_API_KEY,
-            BREEZE_API_SECRET
+            BREEZE_API_SECRET,
         )
 
     if market_data:
@@ -156,11 +156,10 @@ if analyze:
         elif data_type == "OHLC":
             df = prepare_chart_data_icici(market_data.get("ohlcHistory", []))
             if not df.empty:
-                st.line_chart(df[["open","high","low","close"]].tail(30))
+                st.line_chart(df[["open", "high", "low", "close"]].tail(30))
             else:
                 st.info("No OHLC data available for this stock.")
 
-        # AI Analysis
         with st.spinner("🧠 AI is analyzing..."):
             insight = ask_llm(market_data)
 
