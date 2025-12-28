@@ -2,68 +2,46 @@ import streamlit as st
 import requests
 import json
 from datetime import datetime
-from breeze_connect import BreezeConnect
 
 # --------------------------------
 # CONFIG
 # --------------------------------
 OPENROUTER_MODEL = "moonshotai/kimi-k2:free"
+ALPHAVANTAGE_API_KEY = st.secrets["ALPHAVANTAGE_API_KEY"]
 
 st.set_page_config(page_title="AI Trading Assistant", layout="wide")
 st.title("📈 AI Trading Assistant")
 
 # --------------------------------
-# INIT BREEZE (AUTO)
-# --------------------------------
-@st.cache_resource
-def init_breeze():
-    breeze = BreezeConnect(
-        api_key=st.secrets["BREEZE_API_KEY"]
-    )
-    breeze.generate_session(
-        api_secret=st.secrets["BREEZE_API_SECRET"],
-        session_token=st.secrets["BREEZE_SESSION_TOKEN"]
-    )
-    return breeze
-
-try:
-    breeze = init_breeze()
-    st.success("✅ Connected to Breeze")
-except Exception as e:
-    st.error("❌ Breeze connection failed. Check session token.")
-    st.stop()
-
-# --------------------------------
 # USER QUERY
 # --------------------------------
 symbol = st.text_input("Stock Symbol", "RELIANCE")
-exchange = st.selectbox("Exchange", ["NSE", "BSE"])
-interval = st.selectbox("OHLC Interval", ["1minute", "5minute", "15minute"])
+interval = st.selectbox("OHLC Interval", ["1min", "5min", "15min", "30min", "60min"])
 
 analyze = st.button("Analyze Market")
 
 # --------------------------------
 # DATA FETCH
 # --------------------------------
-def fetch_market_data():
-    ltp = breeze.get_quotes(
-        stock_code=symbol,
-        exchange_code=exchange,
-        product_type="cash"
-    )
-
-    ohlc = breeze.get_historical_data(
-        interval=interval,
-        from_date=datetime.now().strftime("%Y-%m-%d"),
-        to_date=datetime.now().strftime("%Y-%m-%d"),
-        stock_code=symbol,
-        exchange_code=exchange,
-        product_type="cash"
-    )
+def fetch_market_data(symbol, interval):
+    # Fetch intraday OHLC
+    ohlc_url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={ALPHAVANTAGE_API_KEY}&outputsize=compact"
+    ohlc_response = requests.get(ohlc_url)
+    ohlc_response.raise_for_status()
+    ohlc_data = ohlc_response.json()
+    
+    # Get latest price (LTP)
+    try:
+        time_series_key = f"Time Series ({interval})"
+        latest_timestamp = max(ohlc_data[time_series_key].keys())
+        latest_data = ohlc_data[time_series_key][latest_timestamp]
+        ltp = float(latest_data["4. close"])
+    except KeyError:
+        ltp = None
 
     return {
         "ltp": ltp,
-        "ohlc": ohlc
+        "ohlc": ohlc_data
     }
 
 # --------------------------------
@@ -114,7 +92,7 @@ Be short, decisive, and practical.
 # --------------------------------
 if analyze:
     with st.spinner("📡 Fetching live market data..."):
-        market_data = fetch_market_data()
+        market_data = fetch_market_data(symbol, interval)
 
     st.subheader("📊 Market Data")
     st.json(market_data)
