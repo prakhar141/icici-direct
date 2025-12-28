@@ -16,13 +16,15 @@ st.title("📈 AI Trading Assistant (ICICI Breeze API)")
 # --------------------------------
 BREEZE_API_KEY = st.secrets["BREEZE_API_KEY"]
 BREEZE_API_SECRET = st.secrets["BREEZE_API_SECRET"]
-ICICI_SESSION = st.secrets["ICICI_SESSION_TOKEN"]
 OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
 
 # --------------------------------
-# STOCK SELECTION
+# USER INPUT
 # --------------------------------
-# Expand this list as needed
+# Dynamic session token input
+icici_session_token = st.text_input("ICICI Breeze Session Token (paste here if expired)", type="password")
+
+# Stock selection
 STOCKS = {
     "RELIANCE": "RELIANCE",
     "TCS": "TCS",
@@ -33,7 +35,6 @@ STOCKS = {
 
 selected_stock = st.selectbox("Select Stock", options=list(STOCKS.keys()))
 data_type = st.selectbox("Select Data Type to Display", options=["LTP", "OHLC", "Volume", "Raw JSON"])
-
 analyze = st.button("Analyze Market")
 
 # --------------------------------
@@ -43,23 +44,29 @@ def fetch_market_data_icici(symbol, session_token, api_key, api_secret):
     """
     Fetch market data from ICICI Direct Breeze API using API key/secret + session token
     """
+    if not session_token:
+        st.error("❌ Session token is required! Please paste it above.")
+        return None
+
     url = f"https://breezeapi.icicidirect.com/api/v1/market/quote?scriptCode={symbol}"
     headers = {
         "X-SessionToken": session_token,
         "X-APIKey": api_key,
-        "X-APISecret": api_secret
+        "X-APISecret": api_secret,
+        "User-Agent": "Mozilla/5.0",  # Sometimes required
+        "Content-Type": "application/json"
     }
 
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
-    except requests.exceptions.RequestException:
-        st.error("❌ Failed to fetch data from ICICI Direct Breeze API.")
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Failed to fetch data: {e}")
         return None
 
     if "data" not in data:
-        st.error(data.get("message") or "❌ Invalid symbol or credentials.")
+        st.error(data.get("message") or "❌ Invalid symbol or session token.")
         return None
 
     return data["data"]
@@ -132,7 +139,7 @@ if analyze:
     with st.spinner("📡 Fetching market data..."):
         market_data = fetch_market_data_icici(
             STOCKS[selected_stock],
-            ICICI_SESSION,
+            icici_session_token,
             BREEZE_API_KEY,
             BREEZE_API_SECRET
         )
